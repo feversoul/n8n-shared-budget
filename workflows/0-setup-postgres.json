@@ -1,0 +1,136 @@
+{
+  "name": "Shared Budget · 0 Setup (Postgres)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Shared Budget · Setup (Postgres)\nRun this once: open it and press **Execute workflow**. It creates `ai_budget`, `ai_reservations` and `ai_budget_queue` for the Postgres ledger and `ai_budget_lab` for the lab, in the database of the **Shared Budget Postgres** credential. Running it again changes nothing.",
+        "width": 560,
+        "height": 160,
+        "color": 4
+      },
+      "id": "fd2a58e8-557a-4786-8c59-eb6effbc5860",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "7c1e233a-3867-4ff7-8aba-227b86660152",
+      "name": "Run once",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/setup/postgres",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f0872c68-b484-4668-8ce0-a7936af39753",
+      "name": "Or call",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        180
+      ],
+      "webhookId": "dc437c62-2a1f-47c4-81fc-5769cec0fd8f",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- One row per budget window. held = open reservations + money already spent.\nCREATE TABLE IF NOT EXISTS ai_budget (\n  budget_key text PRIMARY KEY,\n  cap        bigint NOT NULL,\n  held       bigint NOT NULL DEFAULT 0,\n  spent      bigint NOT NULL DEFAULT 0,\n  updated_at timestamptz NOT NULL DEFAULT now()\n);\n-- One row per model call. The primary key is what stops a retry from reserving twice.\nCREATE TABLE IF NOT EXISTS ai_reservations (\n  budget_key text NOT NULL,\n  item_key   text NOT NULL,\n  owner      text NOT NULL,\n  amount     bigint NOT NULL,\n  actual     bigint,\n  status     text NOT NULL DEFAULT 'reserved',\n  expires_at timestamptz NOT NULL,\n  created_at timestamptz NOT NULL DEFAULT now(),\n  PRIMARY KEY (budget_key, item_key)\n);\nCREATE TABLE IF NOT EXISTS ai_budget_queue (\n  budget_key text NOT NULL,\n  item_key   text NOT NULL,\n  prompt     text NOT NULL,\n  queued_at  timestamptz NOT NULL DEFAULT now(),\n  PRIMARY KEY (budget_key, item_key)\n);\nCREATE TABLE IF NOT EXISTS ai_budget_lab (\n  budget_key text PRIMARY KEY,\n  spent      bigint NOT NULL DEFAULT 0\n);",
+        "options": {}
+      },
+      "id": "c5f9d863-92b7-45be-8ce5-d48a6ee42c57",
+      "name": "Create tables",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "sharedBudgetPg",
+          "name": "Shared Budget Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3954543b-3bad-41b9-8768-3fefd7ec69c3",
+      "name": "Done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Run once": {
+      "main": [
+        [
+          {
+            "node": "Create tables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Or call": {
+      "main": [
+        [
+          {
+            "node": "Create tables",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create tables": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "sharedBudgetSetPg"
+}

@@ -1,0 +1,1237 @@
+{
+  "name": "Shared Budget · 2 Budgeted model call (Data Tables)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Shared Budget · Budgeted model call, ledger in Data Tables\nA sub-workflow with the same input and answers as the Postgres one, and no database of your own.\n\nA Data Table update cannot add to the old value, and \"read the total, then write it back\" loses updates when runs overlap. So there is no total row at all. **Every reservation is its own row**:\n1. Insert a row with the worst-case cost of the call.\n2. Read all rows of this budget and add them up.\n3. If the sum, my row included, is within the cap, the reservation holds. If not, delete my row.\n\nOf two overlapping runs, at least one reads after the other has inserted, so both can never slip under the cap together. Runs that arrive together and would all step back are ordered by row id: the earlier row stays and looks again, the later one goes.\n\nSettling changes the amount of the own row, releasing deletes it.",
+        "width": 640,
+        "height": 400,
+        "color": 4
+      },
+      "id": "5d9746d1-36b1-4b42-8414-23fd6ad1e415",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### When the budget has no room\n`ON_OVER_BUDGET` in **Settings**, or `on_over_budget` on the item:\n- `wait`: try again every `WAIT_SECONDS`, at most `MAX_WAITS` times, then queue. Room appears when other calls settle below what they reserved.\n- `skip`: answer `ai: false`. The calling workflow takes its path without the model.\n- `queue`: store the item for review or a later run and answer `ai: false, queued: true`.\n\n### After the call\n- Answer with usage: **settle**. The reservation becomes the real cost and the rest is free again.\n- Error answer from the API: **release**. The whole reservation is free again and the item may be tried again.\n- No answer (time-out): **unknown**. The provider may have done the work, so the reservation stays and the item is not called again.",
+        "width": 700,
+        "height": 340,
+        "color": 5
+      },
+      "id": "8e7ea038-e165-4ad3-8fee-2d62be61a2cf",
+      "name": "Paths",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        -460
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "afacd778-d233-46dd-8d94-97c639c1b81a",
+      "name": "When called by another workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Settings. Money is counted in micro-dollars (1 USD = 1,000,000), so every sum is a whole number.\nconst BUDGET = 'ai'; // name of the shared budget. Every workflow that uses this name shares it.\nconst WINDOW = 'day'; // 'day' | 'month' | 'none': when the budget starts again (UTC)\nconst CAP_USD = 5; // the cap for one window\nconst ON_OVER_BUDGET = 'queue'; // 'wait' | 'skip' | 'queue'. What happens to an item when the budget has no room.\nconst WAIT_SECONDS = 30; // wait: seconds between two tries\nconst MAX_WAITS = 4; // wait: tries before the item goes to the queue after all\nconst RESERVATION_TTL_SECONDS = 300; // a reservation older than this belongs to a dead run. Must be longer than the time-out.\nconst MODEL = 'gpt-4o-mini';\nconst MODEL_URL = 'https://api.openai.com/v1/chat/completions'; // any OpenAI-compatible chat completions address\nconst PRICE_IN_PER_MTOK = 0.15; // USD per million input tokens\nconst PRICE_OUT_PER_MTOK = 0.6; // USD per million output tokens\nconst RESERVE_INPUT_TOKENS = 2000; // input tokens to reserve per call. A longer prompt reserves more (1 token per 2 characters).\nconst MAX_OUTPUT_TOKENS = 200; // sent as max_tokens, so the output cannot cost more than this\nconst CALL_TIMEOUT_SECONDS = 60;\n\n// One item comes in: { item_key, prompt } and optionally { budget, cap_usd, on_over_budget }.\nconst input = $input.first().json;\nconst item_key = String(input.item_key ?? '').trim();\nif (!item_key) throw new Error('item_key is required: a stable id of this model call, the same on every retry');\nconst prompt = String(input.prompt ?? '');\nconst now = $now.toUTC();\nconst windowKey = WINDOW === 'day' ? now.toFormat('yyyy-LL-dd') : WINDOW === 'month' ? now.toFormat('yyyy-LL') : 'all';\nconst hex = () => Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0');\nreturn [\n  {\n    json: {\n      item_key,\n      prompt,\n      budget_key: `${input.budget ?? BUDGET}:${windowKey}`,\n      cap: Math.round(Number(input.cap_usd ?? CAP_USD) * 1e6),\n      reserve: Math.ceil(Math.max(RESERVE_INPUT_TOKENS, Math.ceil(prompt.length / 2)) * PRICE_IN_PER_MTOK + MAX_OUTPUT_TOKENS * PRICE_OUT_PER_MTOK),\n      on_over_budget: input.on_over_budget ?? ON_OVER_BUDGET,\n      wait_seconds: WAIT_SECONDS,\n      max_waits: MAX_WAITS,\n      ttl_seconds: RESERVATION_TTL_SECONDS,\n      // The run token. Settle and release only touch a reservation that still carries it.\n      owner: `${$execution.id}-${hex()}${hex()}`,\n      model: MODEL,\n      model_url: MODEL_URL,\n      price_in: PRICE_IN_PER_MTOK,\n      price_out: PRICE_OUT_PER_MTOK,\n      max_output_tokens: MAX_OUTPUT_TOKENS,\n      call_timeout_ms: CALL_TIMEOUT_SECONDS * 1000,\n    },\n  },\n];"
+      },
+      "id": "4c217424-fe7c-4120-8846-6ce3f70250bb",
+      "name": "Settings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "budget_key": "={{ $('Settings').first().json.budget_key }}",
+            "item_key": "={{ $('Settings').first().json.item_key }}",
+            "owner": "={{ $('Settings').first().json.owner }}",
+            "amount": "={{ $('Settings').first().json.reserve }}",
+            "reserved": "={{ $('Settings').first().json.reserve }}",
+            "status": "reserved",
+            "expires_at": "={{ $now.plus({ seconds: $('Settings').first().json.ttl_seconds }).toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "budget_key",
+              "displayName": "budget_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "item_key",
+              "displayName": "item_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "owner",
+              "displayName": "owner",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "amount",
+              "displayName": "amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reserved",
+              "displayName": "reserved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "expires_at",
+              "displayName": "expires_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "07be642c-6eb9-459b-8748-764936aea55b",
+      "name": "Add my reservation",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $('Settings').first().json.budget_key }}"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "4bf6ff24-3411-4b2d-8012-052125babf7c",
+      "name": "Rows of this budget",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_LOOKS = 6; // how often a run looks again before it gives the room up\nconst s = $('Settings').first().json;\nconst mine = $('Add my reservation').first().json;\nconst rows = $input.all().map((item) => item.json).filter((row) => row.id !== undefined);\n// The same item with a lower row id was here first.\nconst earlier = rows.find((row) => row.item_key === s.item_key && row.id < mine.id);\n// Every row counts, also rows of runs that are still deciding. Only this\n// sum may let a call through.\nconst total = rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);\n// Runs that arrive together would all see each other and all step back.\n// So the row id breaks the tie: if I fit together with the rows before\n// mine, the rows after mine have to go, and I look again in a moment.\nconst ahead = rows.filter((row) => row.id <= mine.id).reduce((sum, row) => sum + Number(row.amount ?? 0), 0);\nconst before = $('Short pause').isExecuted ? $('Short pause').first().json : null;\nconst looks = before && before.my_id === mine.id ? before.looks + 1 : 1;\nconst reserved = !earlier && total <= s.cap;\nreturn [{ json: { my_id: mine.id, duplicate: !!earlier, total, reserved, looks, look_again: !reserved && !earlier && ahead <= s.cap && looks < MAX_LOOKS } }];"
+      },
+      "id": "87c96fc4-d8f8-48e4-8f6a-9bf8d63c1b92",
+      "name": "Add them up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5f9c7e8f-bbaa-4c40-8fa5-24b1acb29921",
+              "leftValue": "={{ $json.look_again === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "42d8c5e3-3217-41af-8467-4ef3534294dc",
+      "name": "Only later rows in the way?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ 0.1 + Math.random() * 0.3 }}",
+        "unit": "seconds"
+      },
+      "id": "7a606bd0-f9ad-4cb1-8aa8-e3d779b62359",
+      "name": "Short pause",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        200
+      ],
+      "webhookId": "4183dc8b-da0e-4ceb-8764-3a13298fc667"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1d1de1bb-7f3b-4cbc-8457-a41c998c7753",
+              "leftValue": "={{ $json.reserved === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "f23859e7-58ca-4df1-89c6-884880bd1918",
+      "name": "Reserved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Add my reservation').first().json.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ff24379f-dcd5-447d-8b3a-6ef8ac0c8ace",
+      "name": "Remove my reservation",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        420
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dad20c51-9162-4091-83c2-be92b3b3052c",
+              "leftValue": "={{ $('Add them up').first().json.duplicate === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "cd0427de-5c37-4884-8df2-c0b6368df8fe",
+      "name": "Has a reservation already?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Add my reservation').first().json.id }}"
+            },
+            {
+              "keyName": "owner",
+              "condition": "eq",
+              "keyValue": "={{ $('Settings').first().json.owner }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "amount": "={{ $json.cost }}",
+            "status": "settled"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "amount",
+              "displayName": "amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "fe398fbf-2279-41ea-88f4-94486a34e755",
+      "name": "Settle",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        -100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Add my reservation').first().json.id }}"
+            },
+            {
+              "keyName": "owner",
+              "condition": "eq",
+              "keyValue": "={{ $('Settings').first().json.owner }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1b52ee10-23df-4e2f-8340-e5ab460fbb3a",
+      "name": "Release",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Add my reservation').first().json.id }}"
+            },
+            {
+              "keyName": "owner",
+              "condition": "eq",
+              "keyValue": "={{ $('Settings').first().json.owner }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "unknown"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "31955b4a-31c2-4125-8778-0919248d533e",
+      "name": "Mark unknown",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        300
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_queue"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "budget_key": "={{ $('Settings').first().json.budget_key }}",
+            "item_key": "={{ $('Settings').first().json.item_key }}",
+            "prompt": "={{ $('Settings').first().json.prompt }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "budget_key",
+              "displayName": "budget_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "item_key",
+              "displayName": "item_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "prompt",
+              "displayName": "prompt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "101f7df3-f8fc-4547-8eea-554433696e0e",
+      "name": "Queue the item",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        760
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Settings').first().json.model_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('Settings').first().json.model, messages: [{ role: 'user', content: $('Settings').first().json.prompt }], max_tokens: $('Settings').first().json.max_output_tokens }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": "={{ $('Settings').first().json.call_timeout_ms }}"
+        }
+      },
+      "id": "9008181d-1d3e-4b21-8f3d-735f6bdc5909",
+      "name": "Call the model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "openAiApi": {
+          "id": "sharedBudgetModel",
+          "name": "Shared Budget Model"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nconst answer = $input.first().json;\nconst status = Number(answer.statusCode) || 0;\nconst usage = answer.body?.usage;\nlet outcome = 'unknown'; // no answer at all (time-out, connection lost): the provider may have done the work\nlet cost = 0;\nif (status >= 200 && status < 300 && usage) {\n  outcome = 'ok';\n  cost = Math.ceil((usage.prompt_tokens ?? 0) * s.price_in + (usage.completion_tokens ?? 0) * s.price_out);\n} else if (status >= 400) {\n  outcome = 'failed'; // the API answered with an error: nothing was generated\n}\nreturn [\n  {\n    json: {\n      outcome,\n      cost,\n      status,\n      text: outcome === 'ok' ? (answer.body.choices?.[0]?.message?.content ?? '') : null,\n      prompt_tokens: usage?.prompt_tokens ?? 0,\n      completion_tokens: usage?.completion_tokens ?? 0,\n    },\n  },\n];"
+      },
+      "id": "c399ba9c-e017-422c-8cce-1a64e76d1d69",
+      "name": "What it cost",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "40be7a22-7f0f-4fb4-8c35-73327bb31e67",
+              "leftValue": "={{ $json.outcome === 'ok' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "d272b69a-3eaa-4dae-8226-ff929b055715",
+      "name": "Answered?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c34d936d-d4b3-4159-8a1c-b6761f0f171e",
+              "leftValue": "={{ $json.outcome === 'failed' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "b29edae3-4bcc-44c1-828d-3ce6b9a4473a",
+      "name": "Refused by the API?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nreturn [\n  {\n    json: {\n      item_key: s.item_key,\n      budget_key: s.budget_key,\n      ai: true,\n      reason: null,\n      queued: false,\n      text: $('What it cost').first().json.text,\n      cost_micro_usd: $('What it cost').first().json.cost,\n      prompt_tokens: $('What it cost').first().json.prompt_tokens,\n      completion_tokens: $('What it cost').first().json.completion_tokens,\n    },\n  },\n];"
+      },
+      "id": "3d3a27f4-e0b1-419f-80a2-f931166e8ea6",
+      "name": "Done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nreturn [\n  {\n    json: {\n      item_key: s.item_key,\n      budget_key: s.budget_key,\n      ai: false,\n      reason: 'call_failed',\n      queued: false,\n      text: null,\n      cost_micro_usd: 0,\n      status: $('What it cost').first().json.status,\n    },\n  },\n];"
+      },
+      "id": "2fbfadda-e633-485b-829c-e2952ea9f29b",
+      "name": "Call failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nreturn [\n  {\n    json: {\n      item_key: s.item_key,\n      budget_key: s.budget_key,\n      ai: false,\n      reason: 'unknown',\n      queued: false,\n      text: null,\n      cost_micro_usd: 0,\n    },\n  },\n];"
+      },
+      "id": "7c76fdd4-a926-45ac-8b78-6b640f14acfd",
+      "name": "Unknown: kept reserved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d4cdaa43-a391-4487-8989-856a282193b3",
+              "leftValue": "={{ $('Settings').first().json.on_over_budget === 'wait' && $runIndex < $('Settings').first().json.max_waits }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "828474fa-c66d-4d5e-8d40-b5a8487cb177",
+      "name": "Wait for room?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Settings').first().json.wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "a315a3fb-b4fd-417d-8b2d-429c30be462a",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        460
+      ],
+      "webhookId": "8368791b-bcc6-45fa-8d2e-624044457906"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0b0970eb-245a-4fdb-835b-f23ccd50758a",
+              "leftValue": "={{ $('Settings').first().json.on_over_budget === 'skip' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "9c925797-ca0a-46ad-8e3a-e7e28745ec88",
+      "name": "Skip the AI step?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nreturn [\n  {\n    json: {\n      item_key: s.item_key,\n      budget_key: s.budget_key,\n      ai: false,\n      reason: 'over_budget',\n      queued: false,\n      text: null,\n      cost_micro_usd: 0,\n    },\n  },\n];"
+      },
+      "id": "da7857f2-b026-4e67-8c71-30c9935d6a53",
+      "name": "Skipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nreturn [\n  {\n    json: {\n      item_key: s.item_key,\n      budget_key: s.budget_key,\n      ai: false,\n      reason: 'over_budget',\n      queued: true,\n      text: null,\n      cost_micro_usd: 0,\n    },\n  },\n];"
+      },
+      "id": "1ab7211c-d8db-4a2c-845e-9188270b11e3",
+      "name": "Queued",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('Settings').first().json;\nreturn [\n  {\n    json: {\n      item_key: s.item_key,\n      budget_key: s.budget_key,\n      ai: false,\n      reason: 'duplicate',\n      queued: false,\n      text: null,\n      cost_micro_usd: 0,\n    },\n  },\n];"
+      },
+      "id": "d4c8dfc5-537d-4668-8ba2-f44294c44849",
+      "name": "Duplicate: not called again",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Reservations of dead runs\nA run that died after **Add my reservation** never settles. Every minute this deletes rows that are still `reserved` after `RESERVATION_TTL_SECONDS`.\n\nIf you would rather keep that money reserved until someone has checked the provider, switch this trigger off.",
+        "width": 640,
+        "height": 180,
+        "color": 5
+      },
+      "id": "1eb83204-3b12-4419-8340-490a3418cdf4",
+      "name": "Sweep",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "368a688f-dd57-4c7f-8148-429f939e4ebd",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        1120
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "reserved"
+            },
+            {
+              "keyName": "expires_at",
+              "condition": "lt",
+              "keyValue": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b5980238-3c1f-43d7-8d23-a93148df0b16",
+      "name": "Delete dead reservations",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        1120
+      ],
+      "alwaysOutputData": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Call the model": {
+      "main": [
+        [
+          {
+            "node": "What it cost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "What it cost": {
+      "main": [
+        [
+          {
+            "node": "Answered?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answered?": {
+      "main": [
+        [
+          {
+            "node": "Settle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Refused by the API?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refused by the API?": {
+      "main": [
+        [
+          {
+            "node": "Release",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark unknown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settle": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release": {
+      "main": [
+        [
+          {
+            "node": "Call failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark unknown": {
+      "main": [
+        [
+          {
+            "node": "Unknown: kept reserved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for room?": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip the AI step?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Add my reservation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip the AI step?": {
+      "main": [
+        [
+          {
+            "node": "Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue the item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue the item": {
+      "main": [
+        [
+          {
+            "node": "Queued",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When called by another workflow": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Add my reservation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add my reservation": {
+      "main": [
+        [
+          {
+            "node": "Rows of this budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rows of this budget": {
+      "main": [
+        [
+          {
+            "node": "Add them up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add them up": {
+      "main": [
+        [
+          {
+            "node": "Reserved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserved?": {
+      "main": [
+        [
+          {
+            "node": "Call the model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Only later rows in the way?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only later rows in the way?": {
+      "main": [
+        [
+          {
+            "node": "Short pause",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Remove my reservation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Short pause": {
+      "main": [
+        [
+          {
+            "node": "Rows of this budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove my reservation": {
+      "main": [
+        [
+          {
+            "node": "Has a reservation already?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has a reservation already?": {
+      "main": [
+        [
+          {
+            "node": "Duplicate: not called again",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait for room?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Delete dead reservations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "sharedBudgetDt001"
+}

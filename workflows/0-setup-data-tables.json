@@ -1,0 +1,250 @@
+{
+  "name": "Shared Budget · 0 Setup (Data Tables)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Shared Budget · Setup (Data Tables)\nRun this once: open it and press **Execute workflow**. It creates the data tables `budget_ledger` and `budget_queue` for the Data Table ledger and `budget_lab` for the lab. Running it again changes nothing.\n\nThe webhook does the same for scripted installs (`POST budget/setup/data-tables`). You can delete it.",
+        "width": 560,
+        "height": 200,
+        "color": 4
+      },
+      "id": "222eb456-e4eb-4a50-83e6-b63c2ba955c9",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b5029bb0-29de-4124-83d2-59e180c5d8d9",
+      "name": "Run once",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/setup/data-tables",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5a8acee1-76d1-4d96-8b35-2100ae91d4fb",
+      "name": "Or call",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        180
+      ],
+      "webhookId": "da51a51a-6178-44f8-8e3e-a82ad6607963",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "budget_ledger",
+        "columns": {
+          "column": [
+            {
+              "name": "budget_key",
+              "type": "string"
+            },
+            {
+              "name": "item_key",
+              "type": "string"
+            },
+            {
+              "name": "owner",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "number"
+            },
+            {
+              "name": "reserved",
+              "type": "number"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "expires_at",
+              "type": "date"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "3f2f0fc7-90c6-4412-8860-1d0da0a6e54c",
+      "name": "Create ledger table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "budget_queue",
+        "columns": {
+          "column": [
+            {
+              "name": "budget_key",
+              "type": "string"
+            },
+            {
+              "name": "item_key",
+              "type": "string"
+            },
+            {
+              "name": "prompt",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "0b4950b9-aa6a-44b1-8763-51080d471802",
+      "name": "Create queue table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "budget_lab",
+        "columns": {
+          "column": [
+            {
+              "name": "budget_key",
+              "type": "string"
+            },
+            {
+              "name": "spent",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "2becdb40-ac7d-4ea1-8ab9-df414e93ffb4",
+      "name": "Create lab table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "249a7e6f-4d22-427a-8e00-3ffc53d90c07",
+      "name": "Done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Run once": {
+      "main": [
+        [
+          {
+            "node": "Create ledger table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Or call": {
+      "main": [
+        [
+          {
+            "node": "Create ledger table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create ledger table": {
+      "main": [
+        [
+          {
+            "node": "Create queue table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create queue table": {
+      "main": [
+        [
+          {
+            "node": "Create lab table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create lab table": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "sharedBudgetSetDt"
+}

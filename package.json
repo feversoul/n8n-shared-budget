@@ -1,0 +1,15 @@
+{
+  "name": "n8n-shared-budget",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A shared model budget for overlapping n8n runs: reserve, settle, release, expire. Measured on real n8n, on Postgres and on Data Tables only",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test:e2e": "node scripts/e2e.mjs",
+    "test:e2e:postgres": "node scripts/e2e.mjs postgres"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

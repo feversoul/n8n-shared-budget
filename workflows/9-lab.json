@@ -1,0 +1,1135 @@
+{
+  "name": "Shared Budget · 9 Lab",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Shared Budget · Lab\nTwo counters without a reservation, for measuring. Not for production.\n\n- `budget/lab/dt-read-then-add`: Data Table: read spent, check, call, read again, write spent + cost\n- `budget/lab/pg-check-then-add`: Postgres: SELECT spent, check, call, UPDATE spent = spent + cost\n\nSame body as the example run. `budget/lab/open` creates the counter rows, `budget/lab/spent` reads them. The tests start several runs at once and compare what the model stand-in billed with the cap.",
+        "width": 700,
+        "height": 300,
+        "color": 4
+      },
+      "id": "16a75d40-3d07-44fd-83c6-5abf057a9c2c",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/lab/dt-read-then-add",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3eff8dcc-0fc9-4028-8cc2-e83f7e1ed207",
+      "name": "dt-read-then-add",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "3211e7d7-4c17-4c40-8b0c-675e7827a4ff",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const MODEL = 'gpt-4o-mini';\nconst MODEL_URL = 'https://api.openai.com/v1/chat/completions'; // any OpenAI-compatible chat completions address\nconst PRICE_IN_PER_MTOK = 0.15; // USD per million input tokens\nconst PRICE_OUT_PER_MTOK = 0.6; // USD per million output tokens\nconst RESERVE_INPUT_TOKENS = 2000; // input tokens to reserve per call. A longer prompt reserves more (1 token per 2 characters).\nconst MAX_OUTPUT_TOKENS = 200; // sent as max_tokens, so the output cannot cost more than this\nconst CALL_TIMEOUT_SECONDS = 60;\nconst body = $input.first().json.body ?? {};\nreturn (body.items ?? []).map((entry) => {\n  const prompt = `Answer with one word, the category of this message: ${entry.text}`;\n  return {\n    json: {\n      item_key: String(entry.id),\n      prompt,\n      budget_key: body.budget,\n      cap: Math.round(Number(body.cap_usd) * 1e6),\n      reserve: Math.ceil(Math.max(RESERVE_INPUT_TOKENS, Math.ceil(prompt.length / 2)) * PRICE_IN_PER_MTOK + MAX_OUTPUT_TOKENS * PRICE_OUT_PER_MTOK),\n      model: MODEL,\n      model_url: MODEL_URL,\n      price_in: PRICE_IN_PER_MTOK,\n      price_out: PRICE_OUT_PER_MTOK,\n      max_output_tokens: MAX_OUTPUT_TOKENS,\n      call_timeout_ms: CALL_TIMEOUT_SECONDS * 1000,\n    },\n  };\n});"
+      },
+      "id": "b0832d1e-e970-4a20-8507-12f3b4ba2ec6",
+      "name": "dt-read-then-add · Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a82eb298-8fdc-42c2-837a-364a369c2708",
+      "name": "dt-read-then-add · Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_lab"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.budget_key }}"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      },
+      "id": "7824f82d-38aa-4aa9-86fd-7dec1f36812b",
+      "name": "dt-read-then-add · Read spent",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        80
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fd81896a-ea90-4d9c-86f2-45ab198788cb",
+              "leftValue": "={{ Number($json.spent ?? 0) + $('dt-read-then-add · Loop').first().json.reserve <= $('dt-read-then-add · Loop').first().json.cap }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "18807971-d0fd-46f4-834a-b7f493a18d5e",
+      "name": "dt-read-then-add · Room?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('dt-read-then-add · Loop').first().json.model_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('dt-read-then-add · Loop').first().json.model, messages: [{ role: 'user', content: $('dt-read-then-add · Loop').first().json.prompt }], max_tokens: $('dt-read-then-add · Loop').first().json.max_output_tokens }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": "={{ $('dt-read-then-add · Loop').first().json.call_timeout_ms }}"
+        }
+      },
+      "id": "0ccca752-5c1f-425a-81e7-154b3b227adb",
+      "name": "dt-read-then-add · Call the model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "openAiApi": {
+          "id": "sharedBudgetModel",
+          "name": "Shared Budget Model"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('dt-read-then-add · Loop').first().json;\nconst answer = $input.first().json;\nconst status = Number(answer.statusCode) || 0;\nconst usage = answer.body?.usage;\nlet outcome = 'unknown'; // no answer at all (time-out, connection lost): the provider may have done the work\nlet cost = 0;\nif (status >= 200 && status < 300 && usage) {\n  outcome = 'ok';\n  cost = Math.ceil((usage.prompt_tokens ?? 0) * s.price_in + (usage.completion_tokens ?? 0) * s.price_out);\n} else if (status >= 400) {\n  outcome = 'failed'; // the API answered with an error: nothing was generated\n}\nreturn [\n  {\n    json: {\n      outcome,\n      cost,\n      status,\n      text: outcome === 'ok' ? (answer.body.choices?.[0]?.message?.content ?? '') : null,\n      prompt_tokens: usage?.prompt_tokens ?? 0,\n      completion_tokens: usage?.completion_tokens ?? 0,\n    },\n  },\n];"
+      },
+      "id": "740e6a54-855b-4db9-8ff5-47f74fd89489",
+      "name": "dt-read-then-add · What it cost",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_lab"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $('dt-read-then-add · Loop').first().json.budget_key }}"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      },
+      "id": "31926347-36c0-4f2a-85be-33caeb8f3204",
+      "name": "dt-read-then-add · Read spent again",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_lab"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $('dt-read-then-add · Loop').first().json.budget_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "spent": "={{ Number($json.spent ?? 0) + $('dt-read-then-add · What it cost').first().json.cost }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "spent",
+              "displayName": "spent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "b9acbf5f-f9fd-4596-8b4d-0afba8731746",
+      "name": "dt-read-then-add · Write spent",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { id: $('dt-read-then-add · Loop').first().json.item_key, ai: true } }];"
+      },
+      "id": "272f587b-fbe5-42ca-8097-da99025cdc7f",
+      "name": "dt-read-then-add · Called",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { id: $('dt-read-then-add · Loop').first().json.item_key, ai: false } }];"
+      },
+      "id": "caf38212-0dde-4c9d-85ef-277963bac180",
+      "name": "dt-read-then-add · Over budget",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { results: $input.all().map((entry) => entry.json) } }];"
+      },
+      "id": "ba85b77a-ae7b-4c82-8dc2-427c6f0b44ed",
+      "name": "dt-read-then-add · Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "ee939d35-416d-4e78-84c4-21e4368ffd86",
+      "name": "dt-read-then-add · Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/lab/pg-check-then-add",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e92cb058-2f7e-4c7c-8df0-6c17adf14e98",
+      "name": "pg-check-then-add",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        520
+      ],
+      "webhookId": "df9edb16-00f8-4c0f-80c6-d4442d428c3d",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const MODEL = 'gpt-4o-mini';\nconst MODEL_URL = 'https://api.openai.com/v1/chat/completions'; // any OpenAI-compatible chat completions address\nconst PRICE_IN_PER_MTOK = 0.15; // USD per million input tokens\nconst PRICE_OUT_PER_MTOK = 0.6; // USD per million output tokens\nconst RESERVE_INPUT_TOKENS = 2000; // input tokens to reserve per call. A longer prompt reserves more (1 token per 2 characters).\nconst MAX_OUTPUT_TOKENS = 200; // sent as max_tokens, so the output cannot cost more than this\nconst CALL_TIMEOUT_SECONDS = 60;\nconst body = $input.first().json.body ?? {};\nreturn (body.items ?? []).map((entry) => {\n  const prompt = `Answer with one word, the category of this message: ${entry.text}`;\n  return {\n    json: {\n      item_key: String(entry.id),\n      prompt,\n      budget_key: body.budget,\n      cap: Math.round(Number(body.cap_usd) * 1e6),\n      reserve: Math.ceil(Math.max(RESERVE_INPUT_TOKENS, Math.ceil(prompt.length / 2)) * PRICE_IN_PER_MTOK + MAX_OUTPUT_TOKENS * PRICE_OUT_PER_MTOK),\n      model: MODEL,\n      model_url: MODEL_URL,\n      price_in: PRICE_IN_PER_MTOK,\n      price_out: PRICE_OUT_PER_MTOK,\n      max_output_tokens: MAX_OUTPUT_TOKENS,\n      call_timeout_ms: CALL_TIMEOUT_SECONDS * 1000,\n    },\n  };\n});"
+      },
+      "id": "7ac8cee3-e9db-4b1e-8f07-abe48ed17208",
+      "name": "pg-check-then-add · Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "04e0e129-251d-4aa6-8995-6b5a463538d1",
+      "name": "pg-check-then-add · Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        440,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT spent FROM ai_budget_lab WHERE budget_key = $1::text;",
+        "options": {
+          "queryReplacement": "={{ [$json.budget_key] }}"
+        }
+      },
+      "id": "916d6e72-6bc0-48b4-89b5-f9d19130378c",
+      "name": "pg-check-then-add · Read spent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        600
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "sharedBudgetPg",
+          "name": "Shared Budget Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e8887176-6ea0-49e7-8a5e-fb28f112f4fd",
+              "leftValue": "={{ Number($json.spent ?? 0) + $('pg-check-then-add · Loop').first().json.reserve <= $('pg-check-then-add · Loop').first().json.cap }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "26304f7e-6dac-47d9-8e2c-d8413c9b8ece",
+      "name": "pg-check-then-add · Room?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('pg-check-then-add · Loop').first().json.model_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('pg-check-then-add · Loop').first().json.model, messages: [{ role: 'user', content: $('pg-check-then-add · Loop').first().json.prompt }], max_tokens: $('pg-check-then-add · Loop').first().json.max_output_tokens }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": "={{ $('pg-check-then-add · Loop').first().json.call_timeout_ms }}"
+        }
+      },
+      "id": "59469e6e-1cfb-4940-890b-9e0c8b04d459",
+      "name": "pg-check-then-add · Call the model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        520
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "openAiApi": {
+          "id": "sharedBudgetModel",
+          "name": "Shared Budget Model"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $('pg-check-then-add · Loop').first().json;\nconst answer = $input.first().json;\nconst status = Number(answer.statusCode) || 0;\nconst usage = answer.body?.usage;\nlet outcome = 'unknown'; // no answer at all (time-out, connection lost): the provider may have done the work\nlet cost = 0;\nif (status >= 200 && status < 300 && usage) {\n  outcome = 'ok';\n  cost = Math.ceil((usage.prompt_tokens ?? 0) * s.price_in + (usage.completion_tokens ?? 0) * s.price_out);\n} else if (status >= 400) {\n  outcome = 'failed'; // the API answered with an error: nothing was generated\n}\nreturn [\n  {\n    json: {\n      outcome,\n      cost,\n      status,\n      text: outcome === 'ok' ? (answer.body.choices?.[0]?.message?.content ?? '') : null,\n      prompt_tokens: usage?.prompt_tokens ?? 0,\n      completion_tokens: usage?.completion_tokens ?? 0,\n    },\n  },\n];"
+      },
+      "id": "82e4c399-5496-48b0-88b3-5a5091c7a0a9",
+      "name": "pg-check-then-add · What it cost",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ai_budget_lab SET spent = spent + $2::bigint WHERE budget_key = $1::text\nRETURNING spent;",
+        "options": {
+          "queryReplacement": "={{ [$('pg-check-then-add · Loop').first().json.budget_key, $json.cost] }}"
+        }
+      },
+      "id": "ec461850-bca3-4c61-83d1-0ae98228b26e",
+      "name": "pg-check-then-add · Write spent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1760,
+        520
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "sharedBudgetPg",
+          "name": "Shared Budget Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { id: $('pg-check-then-add · Loop').first().json.item_key, ai: true } }];"
+      },
+      "id": "62a0f8b4-c99d-4de2-81ed-93ef406788b0",
+      "name": "pg-check-then-add · Called",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { id: $('pg-check-then-add · Loop').first().json.item_key, ai: false } }];"
+      },
+      "id": "b23ab467-4922-45ba-8c84-62c11d405008",
+      "name": "pg-check-then-add · Over budget",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { results: $input.all().map((entry) => entry.json) } }];"
+      },
+      "id": "b72b120f-af8e-40d2-877f-3c71af9df3c0",
+      "name": "pg-check-then-add · Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "daaaf23c-eb90-420e-846f-843bfc10264d",
+      "name": "pg-check-then-add · Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/lab/open",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5a63d7e8-6e61-489d-842c-06be2946db39",
+      "name": "open",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1040
+      ],
+      "webhookId": "759bd765-f2c2-40dd-8625-5ae382bec744",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_lab"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "budget_key": "={{ $json.body.budget }}",
+            "spent": 0
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "budget_key",
+              "displayName": "budget_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "spent",
+              "displayName": "spent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "1ac2fb2a-1ebd-4aa9-8f96-ac06f48f08da",
+      "name": "open · data table row",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        1040
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ai_budget_lab (budget_key) VALUES ($1::text) ON CONFLICT DO NOTHING RETURNING budget_key;",
+        "options": {
+          "queryReplacement": "={{ [$('open').first().json.body.budget] }}"
+        }
+      },
+      "id": "efeb165c-2875-4c8f-8c6c-ea366836c838",
+      "name": "open · postgres row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        1040
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "sharedBudgetPg",
+          "name": "Shared Budget Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "6dc41581-9194-4fb0-850d-10c9f334f21e",
+      "name": "open · answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/lab/spent",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2b343252-fd73-4ae3-8822-4bde87dba0c2",
+      "name": "spent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1240
+      ],
+      "webhookId": "169cd551-1f9b-436f-8ed0-d3f4f615db9a",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_lab"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.budget }}"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      },
+      "id": "751512e6-e52a-4408-83b1-024267d6152f",
+      "name": "spent · data table row",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        1240
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT spent FROM ai_budget_lab WHERE budget_key = $1::text;",
+        "options": {
+          "queryReplacement": "={{ [$('spent').first().json.body.budget] }}"
+        }
+      },
+      "id": "ceaf74c3-8292-4061-84a5-ae1be5600565",
+      "name": "spent · postgres row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        1240
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "sharedBudgetPg",
+          "name": "Shared Budget Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { 'dt-read-then-add': Number($('spent · data table row').first().json.spent ?? 0), 'pg-check-then-add': Number($json.spent ?? 0) } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "b77cd6c9-582c-4078-8bb4-8f403de2e23b",
+      "name": "spent · answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        1240
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "dt-read-then-add · What it cost": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Read spent again",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Read spent again": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Write spent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Items": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Loop": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "dt-read-then-add · Read spent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Results": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Read spent": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Room?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Room?": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Call the model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "dt-read-then-add · Over budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Call the model": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · What it cost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Write spent": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Called",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Called": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "dt-read-then-add · Over budget": {
+      "main": [
+        [
+          {
+            "node": "dt-read-then-add · Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · What it cost": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Write spent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Items": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Loop": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "pg-check-then-add · Read spent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Results": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Read spent": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Room?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Room?": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Call the model",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "pg-check-then-add · Over budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Call the model": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · What it cost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Write spent": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Called",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Called": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pg-check-then-add · Over budget": {
+      "main": [
+        [
+          {
+            "node": "pg-check-then-add · Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "open": {
+      "main": [
+        [
+          {
+            "node": "open · data table row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "open · data table row": {
+      "main": [
+        [
+          {
+            "node": "open · postgres row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "open · postgres row": {
+      "main": [
+        [
+          {
+            "node": "open · answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "spent": {
+      "main": [
+        [
+          {
+            "node": "spent · data table row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "spent · data table row": {
+      "main": [
+        [
+          {
+            "node": "spent · postgres row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "spent · postgres row": {
+      "main": [
+        [
+          {
+            "node": "spent · answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none"
+  },
+  "id": "sharedBudgetLab01"
+}

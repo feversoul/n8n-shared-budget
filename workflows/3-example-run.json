@@ -1,0 +1,566 @@
+{
+  "name": "Shared Budget · 3 Example run",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Shared Budget · Example run\nA stand-in for your own workflow: a run gets a list of items and makes one short model call per item, through the budgeted sub-workflow.\n\n`POST budget/run/postgres` or `budget/run/data-table` with `{ \"items\": [{ \"id\": \"a1\", \"text\": \"...\" }] }`. Optional: `budget`, `cap_usd`, `on_over_budget`.\n\n**Use the answer** is where your workflow goes on. `ai: false` means the item took the path without the model.\n\n`POST budget/status/postgres` or `budget/status/data-table` with `{ \"budget_key\": \"ai:2026-01-31\" }` shows what the ledger holds.",
+        "width": 640,
+        "height": 340,
+        "color": 4
+      },
+      "id": "266cbdc2-afe2-4307-8bbf-1432f7e12139",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/run/postgres",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f01971f3-e43d-404f-8471-92171e548c66",
+      "name": "Run on Postgres ledger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -80
+      ],
+      "webhookId": "5d0c1c82-3f0c-493c-8a7d-2195ee9f0164",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/run/data-table",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "56ede7e2-692a-4f61-877e-f578fcdb094b",
+      "name": "Run on Data Table ledger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        100
+      ],
+      "webhookId": "4afc9fc3-4797-455d-8b31-91bfd47384d0",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const hook = $input.first().json;\nconst body = hook.body ?? {};\n// One model call per item. item_key must be the same when the run is retried.\nreturn (body.items ?? []).map((item) => ({\n  json: {\n    item_key: String(item.id),\n    prompt: `Answer with one word, the category of this message: ${item.text}`,\n    budget: body.budget,\n    cap_usd: body.cap_usd,\n    on_over_budget: body.on_over_budget,\n    ledger: String(hook.webhookUrl).endsWith('/postgres') ? 'postgres' : 'data-table',\n  },\n}));"
+      },
+      "id": "8f29522e-46cd-466d-833c-1159517b58d7",
+      "name": "Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d8f7d26-2736-4f3f-8b9b-8d167c5b2a24",
+              "leftValue": "={{ $json.ledger === 'postgres' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "looseTypeValidation": true
+        }
+      },
+      "id": "2ef58a35-142d-43de-8aea-f3ab8ff15f17",
+      "name": "Postgres ledger?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        460,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "sharedBudgetPg001"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "id": "00b1b097-0655-46e3-88ff-02f304e5b34f",
+      "name": "Budgeted call (Postgres)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        680,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "sharedBudgetDt001"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {}
+      },
+      "id": "1ad80f6e-0dc4-4ce5-87ce-49a7aaa7fb88",
+      "name": "Budgeted call (Data Tables)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        680,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      results: $input.all().map(({ json }) => ({\n        id: json.item_key,\n        ai: json.ai,\n        // The deterministic path for items that got no model call.\n        category: json.ai ? json.text : 'needs_review',\n        reason: json.reason,\n        queued: json.queued,\n        cost_micro_usd: json.cost_micro_usd,\n        budget_key: json.budget_key,\n      })),\n    },\n  },\n];"
+      },
+      "id": "3ca72e93-8f4a-4826-849d-130c5611595b",
+      "name": "Use the answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4f9479f6-4168-484c-8f16-31d0a23ca664",
+      "name": "Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/status/postgres",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9358643e-2184-418e-8e3f-2cc5c9550f7e",
+      "name": "Status of Postgres ledger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        420
+      ],
+      "webhookId": "63c4d62f-a5ca-48d3-8667-10c1cded8abc",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT held FROM ai_budget WHERE budget_key = $1::text) AS held,\n  (SELECT spent FROM ai_budget WHERE budget_key = $1::text) AS spent,\n  (SELECT COALESCE(json_agg(json_build_object('item_key', item_key, 'status', status, 'amount', amount, 'actual', actual)), '[]'::json) FROM ai_reservations WHERE budget_key = $1::text) AS reservations,\n  (SELECT COALESCE(json_agg(item_key), '[]'::json) FROM ai_budget_queue WHERE budget_key = $1::text) AS queued;",
+        "options": {
+          "queryReplacement": "={{ [$json.body.budget_key] }}"
+        }
+      },
+      "id": "479c4828-23e0-4169-8300-c3d00da54d0c",
+      "name": "Read ledger",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        240,
+        420
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "sharedBudgetPg",
+          "name": "Shared Budget Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst reservations = row.reservations ?? [];\nconst held = Number(row.held ?? 0);\nconst spent = Number(row.spent ?? 0);\nconst queued = row.queued ?? [];\nconst count = (status) => reservations.filter((row) => row.status === status).length;\nreturn [\n  {\n    json: {\n      held,\n      spent,\n      open: count('reserved'),\n      unknown: count('unknown'),\n      settled: count('settled'),\n      items: Object.fromEntries(reservations.map((row) => [row.item_key, row.status])),\n      queued,\n    },\n  },\n];"
+      },
+      "id": "703c1ec9-5241-4ac8-8932-5e4865d0df0d",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "15464d3a-eb0a-46e7-8b88-d2b9aacdb710",
+      "name": "Status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "budget/status/data-table",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "66cbabf1-c02b-4aaa-85d2-eb08c964d4ec",
+      "name": "Status of Data Table ledger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        620
+      ],
+      "webhookId": "21d7d669-3e96-495b-8606-c32b29d0cd2c",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "sharedBudgetKey",
+          "name": "Shared Budget Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_ledger"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.body.budget_key }}"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "4634e869-51d3-4084-8870-8e3052378260",
+      "name": "Read rows",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        620
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "budget_queue"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "budget_key",
+              "condition": "eq",
+              "keyValue": "={{ $('Status of Data Table ledger').first().json.body.budget_key }}"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "fa62a4fd-431e-42c9-86f1-0d78b320504f",
+      "name": "Read queue",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        800
+      ],
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const reservations = $('Read rows').all().map((item) => item.json).filter((row) => row.id !== undefined);\nconst queued = $('Read queue').all().map((item) => item.json).filter((row) => row.id !== undefined).map((row) => row.item_key);\n// No total row: what is held is the sum of the rows.\nconst held = reservations.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);\nconst spent = reservations.filter((row) => row.status === 'settled').reduce((sum, row) => sum + Number(row.amount ?? 0), 0);\nconst count = (status) => reservations.filter((row) => row.status === status).length;\nreturn [\n  {\n    json: {\n      held,\n      spent,\n      open: count('reserved'),\n      unknown: count('unknown'),\n      settled: count('settled'),\n      items: Object.fromEntries(reservations.map((row) => [row.item_key, row.status])),\n      queued,\n    },\n  },\n];"
+      },
+      "id": "3e400441-891b-48bd-8289-984cb1751b52",
+      "name": "Summary of rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "e1f35ff6-4ffc-47e0-84e4-73c55f66c147",
+      "name": "Status of rows",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        620
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Run on Postgres ledger": {
+      "main": [
+        [
+          {
+            "node": "Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on Data Table ledger": {
+      "main": [
+        [
+          {
+            "node": "Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Items": {
+      "main": [
+        [
+          {
+            "node": "Postgres ledger?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres ledger?": {
+      "main": [
+        [
+          {
+            "node": "Budgeted call (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Budgeted call (Data Tables)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Budgeted call (Postgres)": {
+      "main": [
+        [
+          {
+            "node": "Use the answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Budgeted call (Data Tables)": {
+      "main": [
+        [
+          {
+            "node": "Use the answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use the answer": {
+      "main": [
+        [
+          {
+            "node": "Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status of Postgres ledger": {
+      "main": [
+        [
+          {
+            "node": "Read ledger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read ledger": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary": {
+      "main": [
+        [
+          {
+            "node": "Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status of Data Table ledger": {
+      "main": [
+        [
+          {
+            "node": "Read rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read rows": {
+      "main": [
+        [
+          {
+            "node": "Read queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read queue": {
+      "main": [
+        [
+          {
+            "node": "Summary of rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary of rows": {
+      "main": [
+        [
+          {
+            "node": "Status of rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "sharedBudgetRun01"
+}
