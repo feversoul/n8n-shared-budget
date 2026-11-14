@@ -106,7 +106,7 @@ Waiting keeps an execution open and only helps when room will appear soon. For a
 | No answer (time-out, connection lost)  | **Unknown**: the provider may have done the work. The reservation stays, the item is not called again, and the sweep leaves it. Resolve it by hand. |
 | The run died before any of this        | The sweep gives the reservation back once it is older than `RESERVATION_TTL_SECONDS`.                                                               |
 
-The last row is a choice, and the test shows its price: n8n was killed during two calls, the stand-in finished and billed both (248 micro-dollars), and after the lifetime both ledgers showed 0 for them. If you would rather keep that money reserved until someone has checked the provider, switch the **Every minute** trigger off. A dead reservation then stays `reserved` for the rest of the window.
+The last row is the default, and it is a choice. The test shows its price: n8n was killed during two calls, the stand-in finished and billed both (248 micro-dollars), and after the lifetime both ledgers showed 0 for them. If you would rather keep that money reserved until someone has checked the provider, switch the **Every minute** trigger off. A dead reservation then stays `reserved` for the rest of the window.
 
 The model node has no Retry On Fail, on purpose: one reservation pays for one request. If you use a chain or agent node instead, set the model's Max Retries to 0, or every hidden retry is a call the budget did not see.
 
@@ -123,9 +123,11 @@ For n8n Cloud or an n8n you already run (2.x).
 2. Pick one ledger:
    - **Postgres**: create a **Postgres** credential named exactly `Shared Budget Postgres`. Import `0-setup-postgres.json` and `1-budget-postgres.json`.
    - **Data Tables**: import `0-setup-data-tables.json` and `2-budget-data-table.json`.
-3. The setup workflow has a webhook for scripted installs that wants a **Header Auth** credential named `Shared Budget Key`. Delete that webhook node, or create the credential. Then press **Execute workflow**. It creates the tables.
+3. The setup workflow has a webhook for scripted installs that wants a **Header Auth** credential named `Shared Budget Key`. Create the credential, or delete that webhook node together with the **Done** node behind it (without the webhook, a run ends red on **Done** with "No Webhook node found", after the tables were created). Then press **Execute workflow**. It creates the tables.
 4. Open the budgeted workflow and set the values at the top of **Settings**: `BUDGET`, `WINDOW`, `CAP_USD`, `ON_OVER_BUDGET`, the model, its two prices and the token limits. Publish it, so the sweep runs.
 5. In your own workflow, where the model node was, add **Execute Sub-workflow**, pick the budgeted workflow, mode **Run once for each item**, and pass `item_key` and `prompt`. Then branch on `ai`.
+
+On n8n Cloud the sweep is one execution a minute once the budgeted workflow is published, about 43,200 a month. That is more than the Starter plan (2,500 a month) or the Pro plan (10,000) includes, as listed on the Cloud plan page on 2026-11-14. Open **Every minute** and set a longer interval: a dead run's reservation is given back by the first sweep after `RESERVATION_TTL_SECONDS`, so an hourly sweep means up to an hour. Neither ledger was run on n8n Cloud.
 
 `3-example-run.json` shows step 5 (it also needs the `Shared Budget Key` credential for its webhooks). `9-lab.json` is only needed to repeat the measurements.
 

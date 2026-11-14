@@ -373,11 +373,11 @@ const setupTables = workflow(IDS.setupTables, 'Shared Budget · 0 Setup (Data Ta
       '## Shared Budget · Setup (Data Tables)',
       `Run this once: open it and press **Execute workflow**. It creates the data tables \`${LEDGER}\` and \`${QUEUE}\` for the Data Table ledger and \`${LAB}\` for the lab. Running it again changes nothing.`,
       '',
-      'The webhook does the same for scripted installs (`POST budget/setup/data-tables`). You can delete it.',
+      'The webhook does the same for scripted installs (`POST budget/setup/data-tables`). If you delete it, delete **Done** too: that node only answers the webhook, and without the webhook a run ends on it with "No Webhook node found".',
     ],
-    [-40, -260],
+    [-40, -320],
     560,
-    200,
+    260,
   );
   w.node('Run once', 'manualTrigger', 1, [0, 0], {});
   w.hook('Or call', 'setup/data-tables', [0, 180]);

@@ -73,7 +73,9 @@ async function until(check, timeoutMs = 30_000, stepMs = 500) {
 const ready = () =>
   until(async () => {
     try {
-      return (await call('status/data-table', { budget_key: 'ready' })).status === 200 && (await call('status/postgres', { budget_key: 'ready' })).status === 200;
+      // While n8n starts, every path answers 200 with a "starting up" page, so wait for JSON.
+      const answers = [await call('status/data-table', { budget_key: 'ready' }), await call('status/postgres', { budget_key: 'ready' })];
+      return answers.every((answer) => answer.status === 200 && answer.json !== null);
     } catch {
       return false;
     }
